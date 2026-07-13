@@ -1,0 +1,302 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0
+             https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <!-- ── Coordinates ──────────────────────────────────────────────────── -->
+    <groupId>com.mph.duplicate</groupId>
+    <artifactId>duplicate-image-finder</artifactId>
+    <version>1.0.0</version>
+    <packaging>jar</packaging>
+    <name>Duplicate Image Finder</name>
+    <description>
+        Standalone tool to scan multiple directories for duplicate image files
+        and move duplicates to a separate folder. Optimised for 2 TB+ datasets.
+    </description>
+
+    <!-- ── Properties ───────────────────────────────────────────────────── -->
+    <properties>
+        <java.version>17</java.version>
+        <maven.compiler.source>${java.version}</maven.compiler.source>
+        <maven.compiler.target>${java.version}</maven.compiler.target>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <!-- Final jar name (no version suffix for convenience) -->
+        <jar.finalName>duplicate-image-finder</jar.finalName>
+        <!-- Main class executed by java -jar -->
+        <mainClass>com.mph.duplicate.DuplicateImageFinderMain</mainClass>
+    </properties>
+
+    <!--
+        ── Dependency Management ─────────────────────────────────────────────
+        Forces patched versions of vulnerable transitive dependencies.
+
+        commons-lang3 3.16.0  →  3.18.0
+          Pulled in by: poi-ooxml (transitively)
+          CVE-2025-48924 (MEDIUM, Score 5.3)
+          Uncontrolled Recursion in ClassUtils.getClass() on long inputs.
+          Fix: https://www.mend.io/vulnerability-database/CVE-2025-48924
+
+        jline 3.23.0  →  3.25.0
+          Pulled in by: me.tongfei:progressbar (transitively)
+          CVE-2023-50572 (Score 5.5)
+          OOM in GroovyEngine.execute in jline-groovy <= 3.24.1.
+          Fix: https://www.mend.io/vulnerability-database/CVE-2023-50572
+    -->
+    <dependencyManagement>
+        <dependencies>
+            <!-- Fixes CVE-2025-48924 – upgrade from 3.16.0 to 3.18.0 -->
+            <dependency>
+                <groupId>org.apache.commons</groupId>
+                <artifactId>commons-lang3</artifactId>
+                <version>3.18.0</version>
+            </dependency>
+
+            <!-- Fixes CVE-2023-50572 – upgrade from 3.23.0 to 3.25.0 -->
+            <dependency>
+                <groupId>org.jline</groupId>
+                <artifactId>jline</artifactId>
+                <version>3.25.0</version>
+            </dependency>
+        </dependencies>
+    </dependencyManagement>
+
+    <!-- ── Dependencies ─────────────────────────────────────────────────── -->
+    <dependencies>
+        <!-- Lombok – compile-time only, not bundled in fat jar -->
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <version>1.18.30</version>
+            <scope>provided</scope>
+        </dependency>
+
+        <!-- SLF4J API – logging facade -->
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.12</version>
+        </dependency>
+
+        <!-- Logback – SLF4J implementation (replaces SimpleLogger) -->
+        <dependency>
+            <groupId>ch.qos.logback</groupId>
+            <artifactId>logback-classic</artifactId>
+            <version>1.5.25</version>
+        </dependency>
+
+        <!--
+            Log4j2 → SLF4J bridge.
+            Apache POI pulls in log4j-api; without a Log4j2 implementation on the
+            classpath, Log4j2 prints "Could not find a logging implementation" and
+            falls back to its own SimpleLogger.  This bridge intercepts every
+            Log4j2 API call and routes it through SLF4J → Logback instead,
+            so the warning disappears and all POI logs flow into our Logback config.
+        -->
+        <dependency>
+            <groupId>org.apache.logging.log4j</groupId>
+            <artifactId>log4j-to-slf4j</artifactId>
+            <version>2.23.1</version>
+        </dependency>
+
+        <!-- ME Progress Bar – terminal progress bar (ANSI, no native deps) -->
+        <dependency>
+            <groupId>me.tongfei</groupId>
+            <artifactId>progressbar</artifactId>
+            <version>0.10.0</version>
+        </dependency>
+
+        <!-- Apache POI – Excel report generation (XSSF = .xlsx) -->
+        <dependency>
+            <groupId>org.apache.poi</groupId>
+            <artifactId>poi-ooxml</artifactId>
+            <version>5.4.0</version>
+            <exclusions>
+                <!-- Exclude POI's log4j-api; log4j-to-slf4j above brings the right version -->
+                <exclusion>
+                    <groupId>org.apache.logging.log4j</groupId>
+                    <artifactId>log4j-api</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+
+        <!--
+            Apache PDFBox – used for the PDF-to-Image conversion feature.
+            Renders each PDF page to a BufferedImage and saves as PNG.
+        -->
+        <dependency>
+            <groupId>org.apache.pdfbox</groupId>
+            <artifactId>pdfbox</artifactId>
+            <version>3.0.3</version>
+        </dependency>
+
+        <!--
+            JavaCV – Java bindings for FFmpeg, used for video frame extraction
+            and perceptual hashing of video files.
+            Exclude JavaFX transitive deps: their POM metadata for version 17
+            is broken on Maven Central (produces 6 "problems" warnings during
+            effective-model building).  JavaFX is not needed at runtime here.
+        -->
+        <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>javacv</artifactId>
+            <version>1.5.10</version>
+            <exclusions>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-graphics</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-base</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-swing</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-controls</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-fxml</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-media</artifactId>
+                </exclusion>
+                <exclusion>
+                    <groupId>org.openjfx</groupId>
+                    <artifactId>javafx-web</artifactId>
+                </exclusion>
+            </exclusions>
+        </dependency>
+        <!-- FFmpeg Java wrapper (API jar, no natives) -->
+        <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>ffmpeg</artifactId>
+            <version>6.1.1-1.5.10</version>
+        </dependency>
+        <!-- FFmpeg native binaries for Windows x86_64 -->
+        <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>ffmpeg</artifactId>
+            <version>6.1.1-1.5.10</version>
+            <classifier>windows-x86_64</classifier>
+        </dependency>
+        <!-- JavaCPP (required by JavaCV for native bridging) -->
+        <dependency>
+            <groupId>org.bytedeco</groupId>
+            <artifactId>javacpp</artifactId>
+            <version>1.5.10</version>
+        </dependency>
+
+        <!-- ── Test ── -->
+        <dependency>
+            <groupId>org.junit.jupiter</groupId>
+            <artifactId>junit-jupiter</artifactId>
+            <version>5.10.1</version>
+            <scope>test</scope>
+        </dependency>
+        <dependency>
+            <groupId>org.assertj</groupId>
+            <artifactId>assertj-core</artifactId>
+            <version>3.27.7</version>
+            <scope>test</scope>
+        </dependency>
+    </dependencies>
+
+    <!-- ── Build ────────────────────────────────────────────────────────── -->
+    <build>
+        <finalName>${jar.finalName}</finalName>
+
+        <plugins>
+            <!-- 1. Enforce Java 17 compilation -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.12.1</version>
+                <configuration>
+                    <source>${java.version}</source>
+                    <target>${java.version}</target>
+                    <encoding>UTF-8</encoding>
+                    <annotationProcessorPaths>
+                        <path>
+                            <groupId>org.projectlombok</groupId>
+                            <artifactId>lombok</artifactId>
+                            <version>1.18.30</version>
+                        </path>
+                    </annotationProcessorPaths>
+                </configuration>
+            </plugin>
+
+            <!-- 2. Run JUnit 5 tests -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+                <configuration>
+                    <useModulePath>false</useModulePath>
+                </configuration>
+            </plugin>
+
+            <!-- 3. Maven Shade Plugin – produces a single fat/executable JAR -->
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-shade-plugin</artifactId>
+                <version>3.5.1</version>
+                <executions>
+                    <execution>
+                        <phase>package</phase>
+                        <goals>
+                            <goal>shade</goal>
+                        </goals>
+                        <configuration>
+                            <!-- The original (non-fat) jar is kept as *-original.jar -->
+                            <shadedArtifactAttached>false</shadedArtifactAttached>
+                            <createDependencyReducedPom>false</createDependencyReducedPom>
+                            <transformers>
+                                <!-- Embed the Main-Class so java -jar works -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ManifestResourceTransformer">
+                                    <mainClass>${mainClass}</mainClass>
+                                    <manifestEntries>
+                                        <Built-By>duplicate-image-finder-build</Built-By>
+                                        <Implementation-Version>${project.version}</Implementation-Version>
+                                    </manifestEntries>
+                                </transformer>
+                                <!-- Merge SLF4J / Logback service-loader descriptors -->
+                                <transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/>
+                            </transformers>
+                            <filters>
+                                <!-- Remove module-info and signature files to avoid JAR security issues -->
+                                <filter>
+                                    <artifact>*:*</artifact>
+                                    <excludes>
+                                        <exclude>META-INF/*.SF</exclude>
+                                        <exclude>META-INF/*.DSA</exclude>
+                                        <exclude>META-INF/*.RSA</exclude>
+                                        <exclude>module-info.class</exclude>
+                                        <!--
+                                            Exclude rogue Maven Plugin descriptor shaded in from
+                                            org.apache.xmlbeans:xmlbeans (transitive via poi-ooxml).
+                                            xmlbeans places its plugin descriptor at the root-level
+                                            META-INF/maven/plugin.xml (not under a groupId subdirectory),
+                                            which makes Maven think this JAR is a Maven Plugin and
+                                            produces a conflicting-coordinates warning on install/deploy.
+                                        -->
+                                        <exclude>META-INF/maven/plugin.xml</exclude>
+                                        <!-- Also drop any xmlbeans-specific maven metadata tree -->
+                                        <exclude>META-INF/maven/org.apache.xmlbeans/**</exclude>
+                                    </excludes>
+                                </filter>
+                            </filters>
+                        </configuration>
+                    </execution>
+                </executions>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+
